@@ -1,0 +1,396 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: airflow-platform
+parameters:
+
+  - name: NAMESPACE
+    value: airflow
+
+  - name: AIRFLOW_IMAGE
+    description: Airflow docker image
+    required: true
+
+  - name: AIRFLOW_TAG
+    value: "1.0.0"
+
+  - name: POSTGRES_STORAGE
+    value: 20Gi
+
+  - name: STORAGE_CLASS
+    value: gp3-csi
+
+  - name: AIRFLOW_FERNET_KEY
+    generate: expression
+    from: "[a-zA-Z0-9]{32}"
+
+  - name: AIRFLOW_SECRET_KEY
+    generate: expression
+    from: "[a-zA-Z0-9]{32}"
+
+  - name: AIRFLOW_ADMIN_USER
+    value: admin
+
+  - name: AIRFLOW_ADMIN_PASS
+    value: admin
+
+  - name: ROUTE_HOST
+    description: Airflow UI route host
+    required: true
+
+objects:
+
+# ========================
+# SECRET
+# ========================
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: airflow-secrets
+    namespace: ${NAMESPACE}
+  type: Opaque
+  stringData:
+    POSTGRES_USER: airflow
+    POSTGRES_PASSWORD: airflow
+    POSTGRES_DB: airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+
+# ========================
+# CONFIGMAP
+# ========================
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: airflow-env
+    namespace: ${NAMESPACE}
+  data:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__WEBSERVER__BASE_URL: https://${ROUTE_HOST}
+    AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "true"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+
+# ========================
+# POSTGRES SERVICE
+# ========================
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: postgres
+    namespace: ${NAMESPACE}
+  spec:
+    ports:
+      - port: 5432
+    selector:
+      app: postgres
+
+# ========================
+# POSTGRES STATEFULSET
+# ========================
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: postgres
+    namespace: ${NAMESPACE}
+  spec:
+    serviceName: postgres
+    replicas: 1
+    selector:
+      matchLabels:
+        app: postgres
+    template:
+      metadata:
+        labels:
+          app: postgres
+      spec:
+        containers:
+          - name: postgres
+            image: postgres:15
+            envFrom:
+              - secretRef:
+                  name: airflow-secrets
+            volumeMounts:
+              - name: pgdata
+                mountPath: /var/lib/postgresql/data
+    volumeClaimTemplates:
+      - metadata:
+          name: pgdata
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: ${STORAGE_CLASS}
+          resources:
+            requests:
+              storage: ${POSTGRES_STORAGE}
+
+# ========================
+# REDIS
+# ========================
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: redis
+    namespace: ${NAMESPACE}
+  spec:
+    ports:
+      - port: 6379
+    selector:
+      app: redis
+
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: redis
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: redis
+    template:
+      metadata:
+        labels:
+          app: redis
+      spec:
+        containers:
+          - name: redis
+            image: redis:7
+            ports:
+              - containerPort: 6379
+
+# ========================
+# AIRFLOW API SERVER
+# ========================
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: airflow-api
+    namespace: ${NAMESPACE}
+  spec:
+    ports:
+      - name: http
+        port: 8080
+        targetPort: 8080
+    selector:
+      app: airflow-api
+
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: airflow-api
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: airflow-api
+    template:
+      metadata:
+        labels:
+          app: airflow-api
+      spec:
+        containers:
+          - name: api
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow api-server"]
+            ports:
+              - containerPort: 8080
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# SCHEDULER
+# ========================
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: airflow-scheduler
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: airflow-scheduler
+    template:
+      metadata:
+        labels:
+          app: airflow-scheduler
+      spec:
+        containers:
+          - name: scheduler
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow scheduler"]
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# DAG PROCESSOR
+# ========================
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: airflow-dag-processor
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: airflow-dag-processor
+    template:
+      metadata:
+        labels:
+          app: airflow-dag-processor
+      spec:
+        containers:
+          - name: dag
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow dag-processor"]
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# TRIGGERER
+# ========================
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: airflow-triggerer
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: airflow-triggerer
+    template:
+      metadata:
+        labels:
+          app: airflow-triggerer
+      spec:
+        containers:
+          - name: triggerer
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow triggerer"]
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# WORKERS
+# ========================
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: airflow-worker
+    namespace: ${NAMESPACE}
+  spec:
+    replicas: 2
+    selector:
+      matchLabels:
+        app: airflow-worker
+    template:
+      metadata:
+        labels:
+          app: airflow-worker
+      spec:
+        terminationGracePeriodSeconds: 600
+        containers:
+          - name: worker
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow celery worker"]
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# DB MIGRATE JOB
+# ========================
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: airflow-db-migrate
+    namespace: ${NAMESPACE}
+  spec:
+    template:
+      spec:
+        restartPolicy: OnFailure
+        containers:
+          - name: migrate
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args: ["airflow db migrate"]
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# CREATE ADMIN
+# ========================
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: airflow-create-admin
+    namespace: ${NAMESPACE}
+  spec:
+    template:
+      spec:
+        restartPolicy: OnFailure
+        containers:
+          - name: admin
+            image: ${AIRFLOW_IMAGE}:${AIRFLOW_TAG}
+            command: ["bash","-lc"]
+            args:
+              - >
+                airflow users create
+                --username ${AIRFLOW_ADMIN_USER}
+                --password ${AIRFLOW_ADMIN_PASS}
+                --firstname Admin
+                --lastname User
+                --role Admin
+                --email admin@example.com
+            envFrom:
+              - configMapRef:
+                  name: airflow-env
+              - secretRef:
+                  name: airflow-secrets
+
+# ========================
+# ROUTE
+# ========================
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: airflow-ui
+    namespace: ${NAMESPACE}
+  spec:
+    host: ${ROUTE_HOST}
+    to:
+      kind: Service
+      name: airflow-api
+    port:
+      targetPort: http
+    tls:
+      termination: edge
