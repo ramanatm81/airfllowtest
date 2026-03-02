@@ -2,10 +2,8 @@ apiVersion: template.openshift.io/v1
 kind: Template
 metadata:
   name: airflow-platform
-parameters:
 
-  - name: NAMESPACE
-    value: airflow
+parameters:
 
   - name: AIRFLOW_IMAGE
     description: Airflow docker image
@@ -47,7 +45,6 @@ objects:
   kind: Secret
   metadata:
     name: airflow-secrets
-    namespace: ${NAMESPACE}
   type: Opaque
   stringData:
     POSTGRES_USER: airflow
@@ -63,7 +60,6 @@ objects:
   kind: ConfigMap
   metadata:
     name: airflow-env
-    namespace: ${NAMESPACE}
   data:
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
@@ -82,7 +78,6 @@ objects:
   kind: Service
   metadata:
     name: postgres
-    namespace: ${NAMESPACE}
   spec:
     ports:
       - port: 5432
@@ -96,7 +91,6 @@ objects:
   kind: StatefulSet
   metadata:
     name: postgres
-    namespace: ${NAMESPACE}
   spec:
     serviceName: postgres
     replicas: 1
@@ -134,7 +128,6 @@ objects:
   kind: Service
   metadata:
     name: redis
-    namespace: ${NAMESPACE}
   spec:
     ports:
       - port: 6379
@@ -145,7 +138,6 @@ objects:
   kind: Deployment
   metadata:
     name: redis
-    namespace: ${NAMESPACE}
   spec:
     replicas: 1
     selector:
@@ -169,7 +161,6 @@ objects:
   kind: Service
   metadata:
     name: airflow-api
-    namespace: ${NAMESPACE}
   spec:
     ports:
       - name: http
@@ -182,7 +173,6 @@ objects:
   kind: Deployment
   metadata:
     name: airflow-api
-    namespace: ${NAMESPACE}
   spec:
     replicas: 1
     selector:
@@ -213,7 +203,6 @@ objects:
   kind: Deployment
   metadata:
     name: airflow-scheduler
-    namespace: ${NAMESPACE}
   spec:
     replicas: 1
     selector:
@@ -242,7 +231,6 @@ objects:
   kind: Deployment
   metadata:
     name: airflow-dag-processor
-    namespace: ${NAMESPACE}
   spec:
     replicas: 1
     selector:
@@ -271,7 +259,6 @@ objects:
   kind: Deployment
   metadata:
     name: airflow-triggerer
-    namespace: ${NAMESPACE}
   spec:
     replicas: 1
     selector:
@@ -300,7 +287,6 @@ objects:
   kind: Deployment
   metadata:
     name: airflow-worker
-    namespace: ${NAMESPACE}
   spec:
     replicas: 2
     selector:
@@ -330,7 +316,6 @@ objects:
   kind: Job
   metadata:
     name: airflow-db-migrate
-    namespace: ${NAMESPACE}
   spec:
     template:
       spec:
@@ -353,7 +338,6 @@ objects:
   kind: Job
   metadata:
     name: airflow-create-admin
-    namespace: ${NAMESPACE}
   spec:
     template:
       spec:
@@ -384,7 +368,6 @@ objects:
   kind: Route
   metadata:
     name: airflow-ui
-    namespace: ${NAMESPACE}
   spec:
     host: ${ROUTE_HOST}
     to:
