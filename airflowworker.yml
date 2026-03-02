@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-worker
+  namespace: airflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: airflow-worker
+  template:
+    metadata:
+      labels:
+        app: airflow-worker
+    spec:
+      containers:
+        - name: worker
+          image: your-registry/airflow:1.0.0
+          command: ["bash", "-lc"]
+          args: ["airflow celery worker"]
+          envFrom:
+            - configMapRef:
+                name: airflow-env
+            - secretRef:
+                name: airflow-secrets
